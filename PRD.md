@@ -35,7 +35,7 @@ Construir uma página web onde o usuário:
 | ID | Requisito | Prioridade | Critério de aceite |
 |----|-----------|------------|--------------------|
 | RF01 | Captura webcam via `getUserMedia` com preview espelhado + overlay canvas (bounding box + score) | P0 | Vídeo <1s após permissão, erro amigável se negado/sem câmera |
-| RF02 | Cadastro com 3-5 amostras: só captura frame estável (1 rosto, score>0.7, parado 500ms) | P0 | Barra de progresso 0/3..5, rejeita 0 ou 2+ rostos |
+| RF02 | Cadastro por olhar sustentado: 5s cumulativos olhando para a câmera (1 rosto, score>0.7, de frente, estável) com 1 amostra automática por segundo (5 total) | P0 | Barra de progresso 0-100%, rejeita 0 ou 2+ rostos e olhar desviado |
 | RF03 | Extração de embedding + normalização L2 + média renormalizada | P0 | `meanEmbedding` = média L2-norm das amostras |
 | RF04 | Login 1:1: seleciona usuário, captura live, calcula similaridade cosseno vs `meanEmbedding` | P0 | Exibe % similaridade, distância, threshold, MATCH / NO-MATCH |
 | RF05 | Threshold configurável por perfil (default 0.35 distância, range 0.30-0.70) + slider global na demo | P0 | Mudança reflete imediatamente no resultado |
@@ -109,7 +109,7 @@ Hero curto: "O que é um embedding?" (vetor que resume seu rosto) + cards [Cadas
 ### 5.2 Cadastro `/register`
 1. Input nome/userId (slug único, validação).
 2. Preview webcam + guia oval + overlay box.
-3. Botão "Capturar amostra" habilitado só com frame estável. Contador 1/5...5/5 com thumbnails de qualidade (não foto, só check).
+3. Olhar fixo na câmera por 5 segundos (cronômetro pausa se desviar o olhar): 1 amostra automática por segundo, só com frame válido e frontal. Contador 1/5...5/5 automático.
 4. Ao concluir: mostra embedding médio resumido + botão Salvar. Toast + redireciona para /login.
 
 ### 5.3 Login `/login`

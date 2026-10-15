@@ -4,15 +4,14 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   User,
-  Camera,
   CheckCircle2,
-  Sparkles,
   ArrowRight,
   ShieldCheck,
   RefreshCcw,
   Sliders,
   Check,
   Info,
+  Eye,
 } from 'lucide-react';
 import CameraCapture from './CameraCapture';
 import EmbeddingInspector from './EmbeddingInspector';
@@ -26,6 +25,24 @@ import { upsertProfile, generateUserId, type FaceProfile } from '@/lib/storage';
 import type { DetectionResult } from '@/lib/faceEngine';
 
 const TOTAL_SAMPLES = 5;
+/** Tempo de olhar sustentado exigido para concluir o cadastro. */
+const GAZE_HOLD_MS = 5000;
+/** 1 amostra automática por segundo de olhar válido. */
+const GAZE_SAMPLE_EVERY_MS = 1000;
+/** Limite (rad) de yaw/pitch para considerar que olha de frente para a câmera. */
+const FRONTAL_LIMIT_RAD = 0.3;
+
+/** Extrai ângulos de rotação da face com segurança (null se o modelo não informar). */
+function extractGazeAngles(face: unknown): { yaw: number; pitch: number } | null {
+  if (!face || typeof face !== 'object') return null;
+  const rotation = (face as { rotation?: unknown }).rotation;
+  if (!rotation || typeof rotation !== 'object') return null;
+  const angle = (rotation as { angle?: unknown }).angle;
+  if (!angle || typeof angle !== 'object') return null;
+  const { yaw, pitch } = angle as { yaw?: unknown; pitch?: unknown };
+  if (typeof yaw !== 'number' || typeof pitch !== 'number') return null;
+  return { yaw, pitch };
+}
 
 export default function EnrollmentWizard() {
   const router = useRouter();
@@ -48,6 +65,15 @@ export default function EnrollmentWizard() {
   // Diversidade entre as 5 amostras (maior distância par-a-par). Valores muito
   // baixos indicam capturas quase idênticas -> perfil frágil e super confiante.
   const [sampleDiversity, setSampleDiversity] = useState<number | null>(null);
+
+  // Registro por olhar sustentado: 5s cumulativos olhando para a câmera.
+  const [gazeProgress, setGazeProgress] = useState(0); // 0..1
+  const [gazeHolding, setGazeHolding] = useState(false);
+  const [gazeHint, setGazeHint] = useState('Posicione seu rosto no círculo guia.');
+  const gazeAccumRef = useRef(0);
+  const gazeNextCaptureAtRef = useRef(GAZE_SAMPLE_EVERY_MS);
+  const gazeLastFrameRef = useRef(0);
+  const samplesRef = useRef<number[][]>([]);
 
   // Flash visual no momento da captura
   const [captureFlash, setCaptureFlash] = useState(false);
@@ -78,7 +104,20 @@ export default function EnrollmentWizard() {
 
   const stabilityTrackerRef = useRef(new StabilityTracker(400, 18));
   const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const isCapturingRef = useRef(false);
+
+  // Zera o cronômetro do olhar e as amostras coletadas
+  const resetGazeCapture = useCallback(() => {
+    gazeAccumRef.current = 0;
+    gazeNextCaptureAtRef.current = GAZE_SAMPLE_EVERY_MS;
+    gazeLastFrameRef.current = 0;
+    samplesRef.current = [];
+    setSamples([]);
+    setSamplePreviews([]);
+    setGazeProgress(0);
+    setGazeHolding(false);
+    setGazeHint('Posicione seu rosto no círculo guia.');
+    stabilityTrackerRef.current.reset();
+  }, []);
 
   // Atualiza userId automaticamente com slug ao digitar o nome
   const handleNameChange = (val: string) => {
@@ -90,10 +129,10 @@ export default function EnrollmentWizard() {
   const handleStartCaptureStep = async () => {
     if (!nome.trim()) return;
     setStep(2);
-    setSamples([]);
     setSamplePreviews([]);
     setMeanEmbedding(null);
     setSampleDiversity(null);
+    resetGazeCapture();
     // Se o celular já estiver conectado via QR, não abre a webcam local
     if (!remoteStream) {
       await startCamera();
@@ -121,16 +160,55 @@ export default function EnrollmentWizard() {
   }, [remoteStream, videoRef, step]);
 
   // Processamento do Loop de Inferência (webcam local OU celular remoto)
+  // Registro por olhar: acumula 5s de olhar válido (1 rosto, qualidade OK, de
+  // frente) e coleta 1 amostra automática por segundo. Sem olhar válido, pausa.
   useEffect(() => {
     const cameraActive = isStreaming || usingRemote;
     if (step !== 2 || !cameraActive || !isAiReady) return;
 
     let animationFrameId: number;
     let isProcessing = false;
+    let cancelled = false;
 
     if (!offscreenCanvasRef.current) {
       offscreenCanvasRef.current = document.createElement('canvas');
     }
+
+    const takeAutoSample = (embedding: number[], faceScore: number, sharpness: number): boolean => {
+      // Rejeita vetor degenerado (modelo falhou): ele casaria com qualquer pessoa.
+      if (isDegenerateEmbedding(embedding)) {
+        console.warn('Amostra automática rejeitada: embedding degenerado.');
+        return false;
+      }
+      const normalized = l2Normalize(embedding);
+      samplesRef.current = [...samplesRef.current, normalized];
+      const id = samplesRef.current.length;
+      setSamples([...samplesRef.current]);
+      setSamplePreviews((prev) => [
+        ...prev,
+        {
+          id,
+          score: Math.round((faceScore || 0.9) * 100),
+          sharpness,
+          at: new Date().toLocaleTimeString('pt-BR'),
+        },
+      ]);
+      setCaptureFlash(true);
+      setTimeout(() => setCaptureFlash(false), 200);
+      return true;
+    };
+
+    const finishGazeEnrollment = () => {
+      const collected = samplesRef.current;
+      stopCamera();
+      const mean = computeMeanEmbedding(collected);
+      setMeanEmbedding(mean);
+      setSampleDiversity(maxPairwiseDistance(collected));
+      setGazeProgress(1);
+      setGazeHolding(false);
+      setGazeHint('Registro concluído!');
+      setStep(3);
+    };
 
     const processFrame = async () => {
       const video = videoRef.current;
@@ -143,9 +221,14 @@ export default function EnrollmentWizard() {
 
       try {
         const res = await detect(video);
+        if (cancelled) return;
         setDetectionResult(res);
 
-        if (res && res.primaryFace) {
+        const now = performance.now();
+        const dt = gazeLastFrameRef.current > 0 ? Math.min(now - gazeLastFrameRef.current, 1000) : 0;
+        gazeLastFrameRef.current = now;
+
+        if (res && res.primaryFace && res.embedding) {
           const face = res.primaryFace;
           const [x, y, w, h] = face.box;
 
@@ -178,8 +261,58 @@ export default function EnrollmentWizard() {
           );
 
           setQuality(assessment);
+
+          // Olhando de frente para a câmera?
+          const angles = extractGazeAngles(face);
+          const frontal = angles
+            ? Math.abs(angles.yaw) <= FRONTAL_LIMIT_RAD && Math.abs(angles.pitch) <= FRONTAL_LIMIT_RAD
+            : true;
+
+          const gazeValid =
+            res.faceCount === 1 && assessment.isValid && frontal && !isDegenerateEmbedding(res.embedding);
+
+          if (gazeValid) {
+            gazeAccumRef.current += dt;
+
+            // 1 amostra automática por segundo de olhar
+            if (
+              gazeAccumRef.current >= gazeNextCaptureAtRef.current &&
+              samplesRef.current.length < TOTAL_SAMPLES
+            ) {
+              const ok = takeAutoSample(res.embedding, face.score || 0.9, metrics.sharpness);
+              if (ok) gazeNextCaptureAtRef.current += GAZE_SAMPLE_EVERY_MS;
+            }
+
+            const progress = Math.min(1, gazeAccumRef.current / GAZE_HOLD_MS);
+            setGazeProgress(progress);
+            setGazeHolding(true);
+            const remaining = Math.max(0, (GAZE_HOLD_MS - gazeAccumRef.current) / 1000);
+            setGazeHint(
+              progress >= 1
+                ? 'Perfeito! Processando seu registro...'
+                : `Isso! Continue olhando para a câmera... ${remaining.toFixed(1)}s`
+            );
+
+            if (gazeAccumRef.current >= GAZE_HOLD_MS && samplesRef.current.length >= TOTAL_SAMPLES) {
+              finishGazeEnrollment();
+              return;
+            }
+          } else {
+            setGazeHolding(false);
+            if (res.faceCount === 0) {
+              setGazeHint('Posicione seu rosto no círculo guia.');
+            } else if (res.faceCount > 1) {
+              setGazeHint('Apenas uma pessoa por vez na câmera.');
+            } else if (!frontal) {
+              setGazeHint('Olhe diretamente para a câmera (de frente).');
+            } else {
+              setGazeHint(assessment.message);
+            }
+          }
         } else {
           stabilityTrackerRef.current.reset();
+          setGazeHolding(false);
+          setGazeHint('Posicione seu rosto no círculo guia.');
           setQuality(
             checkFaceQuality(0, null, video.videoWidth, video.videoHeight, { brightness: 0, sharpness: 0 }, false)
           );
@@ -188,62 +321,19 @@ export default function EnrollmentWizard() {
         console.warn('Erro ao processar frame de cadastro:', err);
       } finally {
         isProcessing = false;
-        animationFrameId = requestAnimationFrame(processFrame);
+        if (!cancelled) {
+          animationFrameId = requestAnimationFrame(processFrame);
+        }
       }
     };
 
     animationFrameId = requestAnimationFrame(processFrame);
 
     return () => {
+      cancelled = true;
       cancelAnimationFrame(animationFrameId);
     };
-  }, [step, isStreaming, usingRemote, isAiReady, detect, videoRef]);
-
-  // Função para capturar uma amostra
-  const captureCurrentSample = useCallback(() => {
-    if (isCapturingRef.current) return;
-    if (!detectionResult || !detectionResult.primaryFace || !detectionResult.embedding) return;
-    if (!quality || !quality.isValid) return;
-
-    const rawEmbedding = detectionResult.embedding;
-    // Rejeita vetor degenerado (modelo falhou): ele casaria com qualquer pessoa.
-    if (isDegenerateEmbedding(rawEmbedding)) {
-      console.warn('Amostra rejeitada: embedding degenerado (variância ~0).');
-      return;
-    }
-
-    isCapturingRef.current = true;
-
-    // Dispara efeito visual de flash
-    setCaptureFlash(true);
-    setTimeout(() => setCaptureFlash(false), 200);
-
-    const normalized = l2Normalize(rawEmbedding);
-
-    const newSamples = [...samples, normalized];
-    const previewItem = {
-      id: newSamples.length,
-      score: Math.round((detectionResult.primaryFace.score || 0.9) * 100),
-      sharpness: quality.sharpness,
-      at: new Date().toLocaleTimeString('pt-BR'),
-    };
-
-    setSamples(newSamples);
-    setSamplePreviews((prev) => [...prev, previewItem]);
-
-    // Se completou as 5 amostras, calcula o embedding médio e vai para a etapa 3
-    if (newSamples.length >= TOTAL_SAMPLES) {
-      stopCamera();
-      const mean = computeMeanEmbedding(newSamples);
-      setMeanEmbedding(mean);
-      setSampleDiversity(maxPairwiseDistance(newSamples));
-      setStep(3);
-    }
-
-    setTimeout(() => {
-      isCapturingRef.current = false;
-    }, 400);
-  }, [detectionResult, quality, samples, stopCamera]);
+  }, [step, isStreaming, usingRemote, isAiReady, detect, videoRef, stopCamera]);
 
   // Salvar no LocalStorage
   const handleSaveProfile = () => {
@@ -279,7 +369,7 @@ export default function EnrollmentWizard() {
       <div className="flex items-center justify-between border-b border-slate-800 pb-4">
         {[
           { num: 1, title: 'Identificação' },
-          { num: 2, title: 'Captura Biométrica (5 Amostras)' },
+          { num: 2, title: 'Olhe 5s para a câmera' },
           { num: 3, title: 'Embedding Médio & Salvar' },
         ].map((s) => (
           <div key={s.num} className="flex items-center gap-2">
@@ -379,13 +469,13 @@ export default function EnrollmentWizard() {
           <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <div className="flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-cyan-400" />
+                <Eye className="w-4 h-4 text-cyan-400" />
                 <h3 className="text-sm font-bold text-white">
-                  Coletando Amostras ({samples.length}/{TOTAL_SAMPLES})
+                  Olhe para a câmera por 5 segundos ({samples.length}/{TOTAL_SAMPLES} automáticas)
                 </h3>
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
-                Centralize o rosto no círculo e mantenha-se imóvel até o indicador ficar verde.
+                Mantenha o olhar fixo na câmera — 1 amostra é coletada por segundo, sem botão.
               </p>
             </div>
 
@@ -441,29 +531,39 @@ export default function EnrollmentWizard() {
           {/* Alternativa: celular como webcam via QR */}
           <RemoteWebcamDialog onStreamChange={handleRemoteStream} />
 
-          {/* Botão de Captura Manual / Automática */}
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-4 rounded-2xl bg-slate-900/60 border border-slate-800">
-            <div className="text-xs text-slate-400">
-              {quality?.isValid ? (
-                <span className="text-emerald-400 font-semibold flex items-center gap-1.5">
-                  <CheckCircle2 className="w-4 h-4" />
-                  Frame perfeitamente estabilizado! Pronto para capturar.
-                </span>
-              ) : (
-                <span className="text-slate-400">
-                  Aguardando enquadramento e estabilidade ideais...
-                </span>
-              )}
+          {/* Progresso do olhar (5s) + status */}
+          <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-3">
+            <div className="flex items-center justify-between text-xs">
+              <span
+                className={`font-semibold flex items-center gap-1.5 ${
+                  gazeHolding ? 'text-emerald-400' : 'text-slate-300'
+                }`}
+              >
+                <Eye className={`w-4 h-4 ${gazeHolding ? 'text-emerald-400' : 'text-slate-400'}`} />
+                {gazeHint}
+              </span>
+              <span className="font-mono text-cyan-300 font-bold">
+                {Math.round(gazeProgress * 100)}%
+              </span>
             </div>
 
-            <div className="flex items-center gap-2 w-full sm:w-auto">
+            <div className="w-full h-2.5 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
+              <div
+                className="h-full bg-gradient-to-r from-cyan-500 to-emerald-400 transition-all duration-200"
+                style={{ width: `${Math.round(gazeProgress * 100)}%` }}
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[11px] text-slate-500">
+                O cronômetro pausa se você desviar o olhar — vale o tempo olhando de frente.
+              </p>
               <button
-                onClick={captureCurrentSample}
-                disabled={!quality?.isValid || !detectionResult?.embedding}
-                className="w-full sm:w-auto px-6 py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 font-bold text-sm transition shadow-lg shadow-emerald-500/25 flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                onClick={resetGazeCapture}
+                className="shrink-0 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-2 transition cursor-pointer"
               >
-                <Camera className="w-4 h-4" />
-                <span>Capturar Amostra #{samples.length + 1}</span>
+                <RefreshCcw className="w-3.5 h-3.5" />
+                Reiniciar
               </button>
             </div>
           </div>
@@ -506,9 +606,9 @@ export default function EnrollmentWizard() {
                 <CheckCircle2 className="w-6 h-6" />
               </div>
               <div>
-                <h3 className="text-lg font-bold text-white">5 Amostras Coletadas com Sucesso!</h3>
+                <h3 className="text-lg font-bold text-white">Olhar registrado com sucesso!</h3>
                 <p className="text-xs text-slate-400">
-                  O vetor mestre (meanEmbedding) foi calculado através da média geométrica e renormalização L2.
+                  5 amostras coletadas durante 5 segundos de olhar fixo; o vetor mestre foi calculado por média e renormalização L2.
                 </p>
               </div>
             </div>
@@ -571,11 +671,12 @@ export default function EnrollmentWizard() {
               <button
                 onClick={() => {
                   setStep(2);
-                  setSamples([]);
-                  setSamplePreviews([]);
                   setMeanEmbedding(null);
                   setSampleDiversity(null);
-                  startCamera();
+                  resetGazeCapture();
+                  if (!remoteStream) {
+                    startCamera();
+                  }
                 }}
                 className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold flex items-center justify-center gap-2 transition cursor-pointer"
               >

@@ -1,6 +1,12 @@
 /**
  * Gerenciamento de persistência local (LocalStorage) e validação de esquemas.
  * Em conformidade com a Seção 6 do PRD (chave `face-login-db-v1`).
+ *
+ * NOTA DE ARQUITETURA (futura migração p/ banco de dados): toda a aplicação
+ * acessa perfis SOMENTE pelas funções deste módulo (`getAllProfiles`,
+ * `getProfileById`, `upsertProfile`, `deleteProfile`, ...). Para plugar um
+ * backend/DB, basta reimplementar essas funções (mantendo as assinaturas e o
+ * formato `FaceProfile`) sem tocar nas páginas ou no motor de IA.
  */
 
 export interface FaceProfile {

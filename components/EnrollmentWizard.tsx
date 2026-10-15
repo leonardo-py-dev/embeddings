@@ -360,7 +360,7 @@ export default function EnrollmentWizard() {
     };
 
     upsertProfile(newProfile);
-    router.push('/login');
+    router.push('/reconhecer');
   };
 
   return (
@@ -689,7 +689,7 @@ export default function EnrollmentWizard() {
                 className="w-full sm:w-auto px-8 py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 font-bold text-sm transition shadow-lg shadow-emerald-500/25 flex items-center justify-center gap-2 cursor-pointer"
               >
                 <Check className="w-4 h-4" />
-                <span>Salvar Perfil e Ir para Login</span>
+                <span>Salvar Perfil e Reconhecer</span>
               </button>
             </div>
           </div>

@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Shield, UserPlus, LogIn, Cpu, Sparkles, BookOpen } from 'lucide-react';
+import { Shield, UserPlus, Cpu, Sparkles, BookOpen, ScanFace } from 'lucide-react';
 
 export default function Navbar() {
   const pathname = usePathname();
@@ -10,7 +10,7 @@ export default function Navbar() {
   const navItems = [
     { href: '/', label: 'Início', icon: Sparkles },
     { href: '/register', label: 'Cadastrar Rosto', icon: UserPlus },
-    { href: '/login', label: 'Login Facial', icon: LogIn },
+    { href: '/reconhecer', label: 'Reconhecer', icon: ScanFace },
     { href: '/demo', label: 'Laboratório & Demo', icon: BookOpen },
   ];
 

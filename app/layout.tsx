@@ -11,9 +11,9 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: 'FaceEmbed | Login Facial por Embeddings 100% Client-Side',
+  title: 'FaceEmbed | Reconhecimento Facial por Embeddings 100% Client-Side',
   description:
-    'Demonstração interativa de reconhecimento facial 1:1, extração de vetores de embedding de 512 dimensões, similaridade cosseno e prova de vida diretamente no navegador.',
+    'Demonstração interativa de reconhecimento facial em tempo real, extração de vetores de embedding de 512 dimensões e similaridade cosseno diretamente no navegador.',
   keywords: [
     'Reconhecimento Facial',
     'Embeddings',

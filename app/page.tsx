@@ -5,7 +5,7 @@ import Link from 'next/link';
 import {
   Shield,
   UserPlus,
-  LogIn,
+  ScanFace,
   Sliders,
   Cpu,
   Sparkles,
@@ -48,14 +48,14 @@ export default function HomePage() {
 
         {/* Heading */}
         <h1 className="text-4xl sm:text-6xl font-black text-white tracking-tight leading-tight">
-          Login Facial por{' '}
+          Reconhecimento Facial por{' '}
           <span className="bg-gradient-to-r from-cyan-400 via-teal-300 to-emerald-400 bg-clip-text text-transparent">
             Embeddings Vetoriais
           </span>
         </h1>
 
         <p className="text-base sm:text-lg text-slate-400 max-w-2xl leading-relaxed">
-          Autenticação biométrica 1:1 executada inteiramente na GPU do seu navegador. Sem servidores, sem envio de fotos e com privacidade matemática garantida.
+          Reconhecimento biométrico em tempo real, executado inteiramente na GPU do seu navegador. Sem servidores, sem envio de fotos e com privacidade matemática garantida.
         </p>
 
         {/* CTA Buttons */}
@@ -70,11 +70,11 @@ export default function HomePage() {
           </Link>
 
           <Link
-            href="/login"
+            href="/reconhecer"
             className="w-full sm:w-auto px-7 py-3.5 rounded-2xl bg-slate-900/90 hover:bg-slate-800/90 border border-slate-700/80 text-white font-semibold text-sm transition-all duration-300 hover:scale-[1.02] flex items-center justify-center gap-2.5 shadow-lg shadow-black/40 cursor-pointer"
           >
-            <LogIn className="w-4 h-4 text-cyan-400" />
-            <span>Realizar Login 1:1</span>
+            <ScanFace className="w-4 h-4 text-cyan-400" />
+            <span>Reconhecer em Tempo Real</span>
           </Link>
 
           <Link
@@ -134,7 +134,7 @@ export default function HomePage() {
             </div>
             <h3 className="text-base font-bold text-white">Similaridade Cosseno & Limiar</h3>
             <p className="text-xs text-slate-400 leading-relaxed">
-              No login, o ângulo entre os vetores é calculado via produto escalar. Se a distância for menor que o limiar (ex: 0.35), o acesso é autorizado.
+              No reconhecimento, o ângulo entre os vetores é calculado via produto escalar contra todos os perfis. Se a menor distância ficar abaixo do limiar (ex: 0.35), a identidade é exibida em tempo real.
             </p>
           </div>
         </div>

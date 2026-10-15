@@ -488,7 +488,7 @@ export default function DemoPage() {
         <div className="p-4 rounded-2xl bg-cyan-950/20 border border-cyan-800/30 text-xs text-cyan-300">
           <p className="font-semibold mb-1">Ponto de Equilíbrio (Equal Error Rate - EER):</p>
           <p className="text-slate-300">
-            O valor recomendado de <span className="font-mono text-cyan-400 font-bold">0.35</span> foi calibrado para priorizar a rejeição de outras pessoas (baixo FAR). Se o seu próprio login falhar com boa luz, suba aos poucos até 0.40–0.45 — mas teste sempre com o rosto de outra pessoa para confirmar que ela continua rejeitada.
+            O valor recomendado de <span className="font-mono text-cyan-400 font-bold">0.35</span> foi calibrado para priorizar a rejeição de outras pessoas (baixo FAR). Se o seu próprio reconhecimento falhar com boa luz, suba aos poucos até 0.40–0.45 — mas teste sempre com o rosto de outra pessoa para confirmar que ela continua como desconhecida.
           </p>
         </div>
       </section>

@@ -38,7 +38,7 @@ Construir uma página web onde o usuário:
 | RF02 | Cadastro com 3-5 amostras: só captura frame estável (1 rosto, score>0.7, parado 500ms) | P0 | Barra de progresso 0/3..5, rejeita 0 ou 2+ rostos |
 | RF03 | Extração de embedding + normalização L2 + média renormalizada | P0 | `meanEmbedding` = média L2-norm das amostras |
 | RF04 | Login 1:1: seleciona usuário, captura live, calcula similaridade cosseno vs `meanEmbedding` | P0 | Exibe % similaridade, distância, threshold, MATCH / NO-MATCH |
-| RF05 | Threshold configurável por perfil (default 0.45 distância, range 0.30-0.70) + slider global na demo | P0 | Mudança reflete imediatamente no resultado |
+| RF05 | Threshold configurável por perfil (default 0.35 distância, range 0.30-0.70) + slider global na demo | P0 | Mudança reflete imediatamente no resultado |
 | RF06 | Gestão de perfis em LocalStorage: listar, selecionar, apagar, exportar/importar JSON | P0 | Persistência após reload; import valida schema |
 | RF07 | Controle de qualidade: mensagens "sem rosto", "múltiplos rostos", "muito escuro", "aproxime/afaste", detecção de blur | P1 | Nenhuma captura com qualidade baixa é aceita silenciosamente |
 | RF08 | Liveness básico: exigir 3 frames positivos consecutivos + desafio simples (piscada / virar cabeça) | P1 | Foto estática impressa não loga no teste manual |
@@ -137,7 +137,7 @@ type FaceProfile = {
   embeddingDim: number; // ex 512
   samples: number[][];  // 3-5 x dim, L2-norm
   meanEmbedding: number[]; // média renormalizada
-  threshold: number;    // default 0.45
+  threshold: number;    // default 0.35
   thumbnail?: string;   // dataURL opcional, opt-in
 }
 
@@ -156,7 +156,8 @@ Validação import: checar `version`, `dim` consistente, `samples.length >=3`, v
 - Similaridade: `cosSim(a,b) = dot(a,b)` (já normalizados). Distância: `1 - cosSim` ou euclidiana.
 - Enroll: `mean = normalize(mean(samples))`.
 - Verify: `match = distance < threshold`. Exigir 3 frames consecutivos `match=true` em janela de 2s.
-- Default: `threshold = 0.45` (distância). Range UI 0.30 (estrito) a 0.70 (permissivo).
+- Default: `threshold = 0.35` (distância). Range UI 0.30 (estrito) a 0.70 (permissivo).
+- Histórico: o default anterior (0.45) apresentou falso aceite com pessoa diferente em teste manual; 0.35 prioriza baixo FAR. Perfis antigos com 0.45 exibem aviso de migração no /login.
 - Calibração sugerida nos testes manuais: ajustar até mesma pessoa ~0.15-0.35 e pessoa diferente ~0.55-0.9.
 
 ## 8. Privacidade e Segurança
@@ -183,7 +184,8 @@ Validação import: checar `version`, `dim` consistente, `samples.length >=3`, v
 1. Luz boa vs luz baixa vs contraluz (mesma pessoa).
 2. Óculos / máscara / boné.
 3. Pessoa A vs B, A vs foto de A.
-4. Threshold 0.35 / 0.45 / 0.60 — anotar FAR/FRR informal.
+4. Threshold 0.30 / 0.35 / 0.45 — anotar FAR/FRR informal.
+4b. Teste de impostor obrigatório: cadastrar pessoa A e tentar login com pessoa B deve dar NO-MATCH no default.
 5. Mobile Chrome + desktop Chrome.
 6. Sem WebGL (desabilitar aceleração) — deve exibir fallback.
 

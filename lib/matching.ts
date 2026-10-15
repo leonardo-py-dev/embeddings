@@ -4,6 +4,14 @@
  */
 
 /**
+ * Limiar padrão de distância cosseno. Calibrado de forma conservadora:
+ * 0.35 reduz o FAR (falso aceite de outra pessoa) em relação ao antigo 0.45,
+ * ao custo de exigir melhor iluminação/pose no login genuíno.
+ * Range da UI: 0.30 (estrito) a 0.70 (permissivo).
+ */
+export const DEFAULT_THRESHOLD = 0.35;
+
+/**
  * Normaliza um vetor usando norma L2 (magnitude Euclidiana = 1).
  */
 export function l2Normalize(vector: number[]): number[] {
@@ -122,4 +130,52 @@ export function calculateMatchScore(distance: number, threshold: number): {
     distance: Number(distance.toFixed(4)),
     threshold: Number(threshold.toFixed(4)),
   };
+}
+
+/**
+ * Variância populacional dos componentes do vetor. Embeddings reais
+ * (512-d L2-normalizados) têm variância tipicamente em 1e-4..1e-3.
+ * Variância ~0 indica saída degenerada do modelo (ex: vetor zerado ou
+ * constante), que NÃO deve ser aceita — ela casa com todo mundo ou ninguém.
+ */
+export function embeddingVariance(vector: number[]): number {
+  if (!vector || vector.length === 0) return 0;
+  let mean = 0;
+  for (const v of vector) mean += v;
+  mean /= vector.length;
+  let acc = 0;
+  for (const v of vector) {
+    const d = v - mean;
+    acc += d * d;
+  }
+  return acc / vector.length;
+}
+
+/**
+ * Detecta embedding inválido para cadastro/verificação: valores não
+ * finitos, vetor zerado ou variância desprezível (modelo falhou).
+ */
+export function isDegenerateEmbedding(vector: number[] | null | undefined): boolean {
+  if (!vector || vector.length < 32) return true;
+  for (const v of vector) {
+    if (typeof v !== 'number' || !Number.isFinite(v)) return true;
+  }
+  return embeddingVariance(vector) < 1e-10;
+}
+
+/**
+ * Maior distância cosseno entre todos os pares de amostras. Serve para medir
+ * diversidade do cadastro: amostras quase idênticas (max < ~0.08) indicam
+ * captura estática (mesmo frame/pose), que gera um perfil frágil e super
+ * confiante — peça ao usuário variar pose e expressão entre capturas.
+ */
+export function maxPairwiseDistance(samples: number[][]): number {
+  let max = 0;
+  for (let i = 0; i < samples.length; i++) {
+    for (let j = i + 1; j < samples.length; j++) {
+      const d = cosineDistance(samples[i], samples[j]);
+      if (d > max) max = d;
+    }
+  }
+  return max;
 }

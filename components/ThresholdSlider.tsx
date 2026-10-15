@@ -17,7 +17,7 @@ export default function ThresholdSlider({
   showPresets = true,
 }: ThresholdSliderProps) {
   const getSecurityDescriptor = (val: number) => {
-    if (val < 0.38) {
+    if (val < 0.33) {
       return {
         label: 'Alta Segurança (Estrito)',
         color: 'text-amber-400',
@@ -73,7 +73,7 @@ export default function ThresholdSlider({
         />
         <div className="flex justify-between text-[11px] font-mono text-slate-500 px-0.5">
           <span>0.30 (Mais Rígido)</span>
-          <span className="text-emerald-400 font-semibold">0.45 (Padrão)</span>
+          <span className="text-emerald-400 font-semibold">0.35 (Padrão)</span>
           <span>0.70 (Mais Flexível)</span>
         </div>
       </div>
@@ -84,8 +84,8 @@ export default function ThresholdSlider({
           <span className="text-xs text-slate-400 font-medium">Ajustes:</span>
           <div className="flex flex-wrap gap-1.5">
             {[
-              { val: 0.35, label: 'Estrito (0.35)' },
-              { val: 0.45, label: 'Padrão (0.45)' },
+              { val: 0.30, label: 'Estrito (0.30)' },
+              { val: 0.35, label: 'Padrão (0.35)' },
               { val: 0.55, label: 'Flexível (0.55)' },
             ].map((p) => (
               <button

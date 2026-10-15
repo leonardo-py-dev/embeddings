@@ -134,7 +134,7 @@ export default function HomePage() {
             </div>
             <h3 className="text-base font-bold text-white">Similaridade Cosseno & Limiar</h3>
             <p className="text-xs text-slate-400 leading-relaxed">
-              No login, o ângulo entre os vetores é calculado via produto escalar. Se a distância for menor que o limiar (ex: 0.45), o acesso é autorizado.
+              No login, o ângulo entre os vetores é calculado via produto escalar. Se a distância for menor que o limiar (ex: 0.35), o acesso é autorizado.
             </p>
           </div>
         </div>

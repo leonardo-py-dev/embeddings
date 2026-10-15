@@ -2,7 +2,7 @@
 
 import React, { useEffect } from 'react';
 import confetti from 'canvas-confetti';
-import { CheckCircle2, XCircle, RotateCcw, Sliders, ShieldCheck, ShieldAlert, User } from 'lucide-react';
+import { CheckCircle2, XCircle, RotateCcw, Sliders, ShieldCheck, ShieldAlert, User, Ban, Home } from 'lucide-react';
 import Link from 'next/link';
 
 export interface VerificationResultData {
@@ -10,10 +10,16 @@ export interface VerificationResultData {
   userName: string;
   userId: string;
   similarityScore: number;
+  /** Similaridade cosseno real (1 - distância), sem mapeamento didático. */
+  cosineSimilarity?: number;
   distance: number;
   threshold: number;
   livenessPassed: boolean;
   consecutiveMatches: number;
+  /** Motivo da negação: rosto desconhecido (negado na hora) ou timeout. */
+  denyReason?: 'UNKNOWN_FACE' | 'TIMEOUT';
+  reasonText?: string;
+  at?: string;
   thumbnail?: string;
 }
 
@@ -27,11 +33,17 @@ export default function VerificationResult({ data, onRetry }: VerificationResult
     isMatch,
     userName,
     similarityScore,
+    cosineSimilarity,
     distance,
     threshold,
     livenessPassed,
     consecutiveMatches,
+    denyReason,
+    reasonText,
+    at,
   } = data;
+
+  const isUnknownFace = !isMatch && denyReason === 'UNKNOWN_FACE';
 
   useEffect(() => {
     if (isMatch) {
@@ -47,6 +59,75 @@ export default function VerificationResult({ data, onRetry }: VerificationResult
       }
     }
   }, [isMatch]);
+
+  // TELA DEDICADA: rosto desconhecido detectado na câmera => ACESSO NEGADO
+  if (isUnknownFace) {
+    return (
+      <div className="w-full p-8 sm:p-12 rounded-3xl border-2 border-rose-500/60 bg-gradient-to-b from-rose-950/60 via-slate-900/90 to-slate-950 backdrop-blur-xl shadow-2xl shadow-rose-950/40 text-center space-y-6">
+        <div className="flex flex-col items-center">
+          <div className="w-24 h-24 rounded-3xl flex items-center justify-center mb-4 border-2 border-rose-500/60 bg-rose-500/10 text-rose-400 shadow-xl shadow-rose-500/20">
+            <Ban className="w-12 h-12" />
+          </div>
+          <span className="text-sm font-black uppercase tracking-[0.25em] px-4 py-1.5 rounded-full bg-rose-600 border border-rose-400 text-white shadow-lg shadow-rose-950/50">
+            Acesso Negado
+          </span>
+          <h2 className="text-3xl sm:text-4xl font-black text-white tracking-tight mt-3">
+            Rosto Desconhecido
+          </h2>
+          <p className="text-sm text-slate-300 mt-2 max-w-md">
+            A câmera detectou um rosto que <b>não corresponde</b> ao perfil{' '}
+            <span className="font-semibold text-white">“{userName}”</span>. A tentativa foi
+            bloqueada e registrada no log da sessão.
+          </p>
+          {reasonText && (
+            <p className="text-[11px] font-mono text-rose-300/80 mt-2">{reasonText}</p>
+          )}
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+          <div className="p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800">
+            <p className="text-[11px] uppercase tracking-wider text-slate-400 font-medium">Distância</p>
+            <p className="text-xl font-mono font-bold text-rose-400 mt-1">{distance.toFixed(4)}</p>
+            <p className="text-[10px] text-slate-500 mt-0.5">limiar {threshold.toFixed(2)}</p>
+          </div>
+          <div className="p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800">
+            <p className="text-[11px] uppercase tracking-wider text-slate-400 font-medium">CosSim real</p>
+            <p className="text-xl font-mono font-bold text-white mt-1">
+              {cosineSimilarity !== undefined ? `${(cosineSimilarity * 100).toFixed(1)}%` : '—'}
+            </p>
+            <p className="text-[10px] text-slate-500 mt-0.5">1 − distância</p>
+          </div>
+          <div className="p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800">
+            <p className="text-[11px] uppercase tracking-wider text-slate-400 font-medium">Frames</p>
+            <p className="text-xl font-mono font-bold text-white mt-1">{consecutiveMatches}</p>
+            <p className="text-[10px] text-slate-500 mt-0.5">acima do limiar</p>
+          </div>
+          <div className="p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800">
+            <p className="text-[11px] uppercase tracking-wider text-slate-400 font-medium">Horário</p>
+            <p className="text-xl font-mono font-bold text-white mt-1">{at || '—'}</p>
+            <p className="text-[10px] text-slate-500 mt-0.5">registrado em log</p>
+          </div>
+        </div>
+
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+          <button
+            onClick={onRetry}
+            className="w-full sm:w-auto px-6 py-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-sm transition flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-rose-950/40"
+          >
+            <RotateCcw className="w-4 h-4" />
+            <span>Tentar Novamente</span>
+          </button>
+          <Link
+            href="/"
+            className="w-full sm:w-auto px-6 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-sm transition flex items-center justify-center gap-2 border border-slate-700"
+          >
+            <Home className="w-4 h-4" />
+            <span>Voltar ao Início</span>
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -109,7 +190,9 @@ export default function VerificationResult({ data, onRetry }: VerificationResult
           <p className="text-xl sm:text-2xl font-mono font-bold text-white mt-1">
             {distance.toFixed(4)}
           </p>
-          <p className="text-[10px] text-slate-500 mt-0.5">1 - CosSim</p>
+          <p className="text-[10px] text-slate-500 mt-0.5">
+            CosSim real: {cosineSimilarity !== undefined ? `${(cosineSimilarity * 100).toFixed(1)}%` : '—'}
+          </p>
         </div>
 
         {/* Limiar Usado */}

@@ -23,10 +23,12 @@ import CameraCapture from '@/components/CameraCapture';
 import ThresholdSlider from '@/components/ThresholdSlider';
 import VerificationResult, { type VerificationResultData } from '@/components/VerificationResult';
 import ProfileManager from '@/components/ProfileManager';
+import RemoteWebcamDialog from '@/components/RemoteWebcamDialog';
+import EmbeddingsExportPanel from '@/components/EmbeddingsExportPanel';
 import { useCamera } from '@/hooks/useCamera';
 import { useFaceEngine } from '@/hooks/useFaceEngine';
 import { checkFaceQuality, analyzeImageMetrics, StabilityTracker, type QualityAssessment } from '@/lib/quality';
-import { cosineSimilarity, cosineDistance, calculateMatchScore, l2Normalize } from '@/lib/matching';
+import { cosineSimilarity, cosineDistance, calculateMatchScore, l2Normalize, DEFAULT_THRESHOLD } from '@/lib/matching';
 import { getAllProfiles, type FaceProfile, type AttemptLog } from '@/lib/storage';
 import { LivenessDetector, type LivenessChallengeType, type LivenessStatus } from '@/lib/liveness';
 import type { DetectionResult } from '@/lib/faceEngine';
@@ -36,7 +38,7 @@ export default function LoginPage() {
   const [selectedProfile, setSelectedProfile] = useState<FaceProfile | null>(null);
 
   // Configuração da verificação
-  const [threshold, setThreshold] = useState<number>(0.45);
+  const [threshold, setThreshold] = useState<number>(DEFAULT_THRESHOLD);
   const [challengeType, setChallengeType] = useState<LivenessChallengeType>('CONSECUTIVE_FRAMES');
 
   // Estados de execução
@@ -54,10 +56,13 @@ export default function LoginPage() {
     isStreaming,
     isLoading: isCamLoading,
     error: camError,
+    devices: camDevices,
+    activeDeviceId: camDeviceId,
     isMirrored,
     startCamera,
     stopCamera,
     toggleMirror,
+    clearError: clearCamError,
   } = useCamera({ autoStart: false });
 
   const { isReady: isAiReady, isLoading: isAiLoading, detect } = useFaceEngine();
@@ -70,20 +75,57 @@ export default function LoginPage() {
   const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const verifyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Detecção de rosto desconhecido: N frames consecutivos com rosto válido
+  // porém distância acima do limiar => nega na hora (sem esperar o timeout).
+  const UNKNOWN_STREAK_LIMIT = 10;
+  const UNKNOWN_MARGIN = 0.05;
+  const unknownStreakRef = useRef(0);
+  const unknownDistSumRef = useRef(0);
+  const lastMeasuredDistRef = useRef<number | null>(null);
+
+  const resetUnknownTracking = () => {
+    unknownStreakRef.current = 0;
+    unknownDistSumRef.current = 0;
+    lastMeasuredDistRef.current = null;
+  };
+
+  // Webcam remota (celular via QR). Quando ativa, substitui a webcam local.
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const usingRemote = remoteStream !== null;
+
+  const handleRemoteStream = useCallback(
+    (stream: MediaStream | null) => {
+      if (stream) {
+        stopCamera();
+        clearCamError();
+      }
+      setRemoteStream(stream);
+    },
+    [stopCamera, clearCamError]
+  );
+
+  // Exibe o stream do celular no mesmo <video> do CameraCapture
+  useEffect(() => {
+    if (remoteStream && videoRef.current) {
+      videoRef.current.srcObject = remoteStream;
+      videoRef.current.play().catch(() => {});
+    }
+  }, [remoteStream, videoRef]);
+
   // Carrega perfis ao montar
   useEffect(() => {
     const list = getAllProfiles();
     setProfiles(list);
     if (list.length > 0) {
       setSelectedProfile(list[0]);
-      setThreshold(list[0].threshold || 0.45);
+      setThreshold(list[0].threshold ?? DEFAULT_THRESHOLD);
     }
   }, []);
 
   // Quando o usuário selecionado muda, atualiza o threshold default dele
   const handleSelectProfile = (profile: FaceProfile) => {
     setSelectedProfile(profile);
-    setThreshold(profile.threshold || 0.45);
+    setThreshold(profile.threshold ?? DEFAULT_THRESHOLD);
     setVerificationResult(null);
     setCurrentScore(null);
   };
@@ -95,11 +137,12 @@ export default function LoginPage() {
     setVerificationResult(null);
     setCurrentScore(null);
     setIsVerifying(true);
+    resetUnknownTracking();
 
     livenessDetectorRef.current.setChallenge(challengeType);
     setLivenessStatus(livenessDetectorRef.current.getStatus());
 
-    if (!isStreaming) {
+    if (!isStreaming && !remoteStream) {
       await startCamera();
     }
 
@@ -107,7 +150,13 @@ export default function LoginPage() {
     if (verifyTimeoutRef.current) clearTimeout(verifyTimeoutRef.current);
     verifyTimeoutRef.current = setTimeout(() => {
       if (isVerifying) {
-        finishVerification(false, 0.99, 'Tempo limite de verificação excedido.');
+        // Usa a última distância medida de verdade; 0.99 só se nenhum rosto apareceu
+        const lastDist = lastMeasuredDistRef.current ?? 0.99;
+        const reason =
+          lastMeasuredDistRef.current === null
+            ? 'Tempo limite excedido sem detectar nenhum rosto.'
+            : 'Tempo limite excedido sem correspondência.';
+        finishVerification(false, lastDist, reason, 0, false, 'TIMEOUT');
       }
     }, 15000);
   };
@@ -119,7 +168,8 @@ export default function LoginPage() {
       finalDist: number,
       reason?: string,
       consecutiveCount: number = 0,
-      livenessPassed: boolean = false
+      livenessPassed: boolean = false,
+      denyReason?: 'UNKNOWN_FACE' | 'TIMEOUT'
     ) => {
       if (verifyTimeoutRef.current) clearTimeout(verifyTimeoutRef.current);
       setIsVerifying(false);
@@ -133,10 +183,15 @@ export default function LoginPage() {
         userName: selectedProfile.nome,
         userId: selectedProfile.userId,
         similarityScore: calc.similarityScore,
+        // Similaridade cosseno real (1 - distância), sem o mapeamento didático do score
+        cosineSimilarity: Number((1 - finalDist).toFixed(4)),
         distance: calc.distance,
         threshold,
         livenessPassed,
         consecutiveMatches: consecutiveCount,
+        denyReason,
+        reasonText: reason,
+        at: new Date().toLocaleTimeString('pt-BR'),
       };
 
       setVerificationResult(resultData);
@@ -160,9 +215,10 @@ export default function LoginPage() {
     [selectedProfile, threshold]
   );
 
-  // Loop de Verificação Facial
+  // Loop de Verificação Facial (webcam local OU celular remoto)
   useEffect(() => {
-    if (!isVerifying || !isStreaming || !isAiReady || !selectedProfile) return;
+    const cameraActive = isStreaming || usingRemote;
+    if (!isVerifying || !cameraActive || !isAiReady || !selectedProfile) return;
 
     let animationFrameId: number;
     let isProcessing = false;
@@ -225,6 +281,37 @@ export default function LoginPage() {
           // Atualiza Prova de Vida
           const isCurrentMatch = dist <= threshold && assessment.isValid;
 
+          // Guarda a última distância medida (para o timeout usar valor real)
+          lastMeasuredDistRef.current = dist;
+
+          // Rosto desconhecido? Rosto válido + qualidade OK, mas distância acima
+          // do limiar por N frames seguidos => nega imediatamente (ACESSO NEGADO).
+          // A margem evita negar o usuário real em frames limítrofes (ex: virando
+          // o rosto); casos na margem aguardam o timeout normal.
+          if (!isCurrentMatch && assessment.isValid) {
+            unknownStreakRef.current += 1;
+            unknownDistSumRef.current += dist;
+            const avgUnknownDist = unknownDistSumRef.current / unknownStreakRef.current;
+            if (
+              unknownStreakRef.current >= UNKNOWN_STREAK_LIMIT &&
+              avgUnknownDist > threshold + UNKNOWN_MARGIN
+            ) {
+              finishVerification(
+                false,
+                avgUnknownDist,
+                `Rosto desconhecido detectado (${unknownStreakRef.current} frames consecutivos acima do limiar).`,
+                unknownStreakRef.current,
+                false,
+                'UNKNOWN_FACE'
+              );
+              return;
+            }
+          } else {
+            // Match parcial ou sem qualidade: zera a contagem de desconhecido
+            unknownStreakRef.current = 0;
+            unknownDistSumRef.current = 0;
+          }
+
           // Dados de rotação e gestos para liveness avançado
           const rotation = face.rotation?.angle
             ? { yaw: face.rotation.angle.yaw, pitch: face.rotation.angle.pitch, roll: face.rotation.angle.roll }
@@ -246,6 +333,9 @@ export default function LoginPage() {
             return;
           }
         } else {
+          // Sem rosto no frame: não conta como desconhecido, apenas zera a sequência
+          unknownStreakRef.current = 0;
+          unknownDistSumRef.current = 0;
           setQuality(
             checkFaceQuality(0, null, video.videoWidth, video.videoHeight, { brightness: 0, sharpness: 0 }, false)
           );
@@ -265,7 +355,7 @@ export default function LoginPage() {
     return () => {
       cancelAnimationFrame(animationFrameId);
     };
-  }, [isVerifying, isStreaming, isAiReady, selectedProfile, threshold, detect, finishVerification, videoRef]);
+  }, [isVerifying, isStreaming, usingRemote, isAiReady, selectedProfile, threshold, detect, finishVerification, videoRef]);
 
   return (
     <div className="w-full max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 space-y-8">
@@ -330,6 +420,25 @@ export default function LoginPage() {
             disabled={isVerifying}
           />
 
+          {/* Migração do limiar antigo: perfis cadastrados com default 0.45 */}
+          {selectedProfile && selectedProfile.threshold === 0.45 && threshold === 0.45 && (
+            <div className="p-3.5 rounded-2xl bg-amber-950/40 border border-amber-500/30 text-xs text-amber-200 space-y-2">
+              <p>
+                Este perfil usa o limiar antigo (<span className="font-mono font-bold">0.45</span>),
+                que pode aceitar outras pessoas. Recomendamos{' '}
+                <span className="font-mono font-bold">0.35</span>.
+              </p>
+              <button
+                type="button"
+                disabled={isVerifying}
+                onClick={() => setThreshold(DEFAULT_THRESHOLD)}
+                className="px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 font-semibold transition cursor-pointer disabled:opacity-50"
+              >
+                Aplicar 0.35 nesta sessão
+              </button>
+            </div>
+          )}
+
           {/* Modo de Prova de Vida (Liveness) */}
           <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-3">
             <div className="flex items-center gap-2">
@@ -372,21 +481,33 @@ export default function LoginPage() {
             />
           ) : (
             <div className="space-y-4">
-              {/* Webcam */}
+              {/* Webcam (local ou celular remoto) */}
               <CameraCapture
                 videoRef={videoRef}
-                isStreaming={isStreaming}
+                isStreaming={isStreaming || usingRemote}
                 isLoading={isCamLoading}
-                error={camError}
+                error={usingRemote ? null : camError}
                 isMirrored={isMirrored}
                 onStartCamera={startCamera}
                 onToggleMirror={toggleMirror}
+                devices={camDevices}
+                activeDeviceId={camDeviceId}
+                onSelectDevice={(id) => startCamera(id)}
                 detectionResult={detectionResult}
                 qualityAssessment={quality}
                 showQualityPanel={true}
                 showGuideOval={true}
                 scannerActive={isVerifying}
               />
+
+              {usingRemote && (
+                <p className="text-[11px] font-semibold text-emerald-400">
+                  Fonte ativa: celular remoto (resultados calculados neste PC).
+                </p>
+              )}
+
+              {/* Alternativa: celular como webcam via QR */}
+              <RemoteWebcamDialog onStreamChange={handleRemoteStream} />
 
               {/* Barra de Status de Liveness em tempo real */}
               {isVerifying && livenessStatus && (
@@ -507,6 +628,9 @@ export default function LoginPage() {
           </div>
         </section>
       )}
+
+      {/* Export JSON dos embeddings: local salva em ./exports, prod preview + download */}
+      <EmbeddingsExportPanel title="Exportar embeddings cadastrados (JSON)" />
     </div>
   );
 }

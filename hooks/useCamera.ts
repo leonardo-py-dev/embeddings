@@ -22,6 +22,7 @@ export interface UseCameraReturn {
   stopCamera: () => void;
   switchCamera: () => Promise<void>;
   toggleMirror: () => void;
+  clearError: () => void;
 }
 
 export function useCamera({
@@ -83,7 +84,28 @@ export function useCamera({
       }
 
       try {
-        const constraints: MediaStreamConstraints = {
+        // Checagem prévia: se o sistema não expõe nenhum dispositivo de vídeo,
+        // falha rápido com mensagem acionável em vez de estourar NotFoundError.
+        try {
+          const all = await navigator.mediaDevices.enumerateDevices();
+          const videoInputs = all.filter((d) => d.kind === 'videoinput');
+          setDevices(videoInputs);
+          if (videoInputs.length === 0) {
+            setError(
+              'Nenhuma câmera foi encontrada neste dispositivo. Se este PC não tem webcam, use a opção "celular como webcam (QR)" abaixo. No Windows, verifique também Configurações > Bluetooth e dispositivos > Câmeras e a chave de privacidade do navegador.'
+            );
+            setIsStreaming(false);
+            return;
+          }
+          // Se um deviceId específico foi pedido mas não existe mais, ignora o filtro.
+          if (deviceId && !videoInputs.some((d) => d.deviceId === deviceId)) {
+            deviceId = undefined;
+          }
+        } catch {
+          // Se enumerateDevices falhar, segue para o getUserMedia e trata o erro lá.
+        }
+
+        const fullConstraints: MediaStreamConstraints = {
           audio: false,
           video: {
             width: { ideal: idealWidth },
@@ -93,7 +115,19 @@ export function useCamera({
           },
         };
 
-        const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+        let mediaStream: MediaStream;
+        try {
+          mediaStream = await navigator.mediaDevices.getUserMedia(fullConstraints);
+        } catch (firstErr: unknown) {
+          const name = firstErr instanceof DOMException ? firstErr.name : (firstErr as { name?: string })?.name;
+          // Fallback: restrições ideais/exatas podem gerar Overconstrained/NotFound
+          // em hardware simples. Tenta o modo mais permissivo antes de desistir.
+          if (name === 'OverconstrainedError' || name === 'NotFoundError') {
+            mediaStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: true });
+          } else {
+            throw firstErr;
+          }
+        }
         streamRef.current = mediaStream;
         setStream(mediaStream);
 
@@ -122,17 +156,18 @@ export function useCamera({
         }
 
         await refreshDevices();
-      } catch (err: any) {
+      } catch (err: unknown) {
+        const name = err instanceof DOMException ? err.name : (err as { name?: string })?.name;
         console.error('Erro ao acessar webcam:', err);
         let msg = 'Não foi possível acessar a câmera.';
-        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-          msg = 'Permissão de acesso à câmera negada. Habilite nas configurações do seu navegador.';
-        } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
-          msg = 'Nenhum dispositivo de câmera foi encontrado no sistema.';
-        } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
-          msg = 'A câmera está sendo utilizada por outro aplicativo ou processo.';
-        } else if (err.name === 'OverconstrainedError') {
-          msg = 'Resolução ou restrição de câmera não suportada pelo hardware.';
+        if (name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError') {
+          msg = 'Permissão de câmera negada ou contexto inseguro. Permita o acesso no ícone de câmera da barra de endereço e use HTTPS (ou localhost).';
+        } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+          msg = 'Nenhum dispositivo de câmera foi encontrado no sistema. Se este PC não tem webcam, use a opção "celular como webcam (QR)" abaixo. Verifique também se a câmera não está desabilitada no Gerenciador de Dispositivos / Configurações do Windows.';
+        } else if (name === 'NotReadableError' || name === 'TrackStartError' || name === 'AbortError') {
+          msg = 'A câmera está sendo utilizada por outro aplicativo (ex: Teams, Zoom, OBS) ou falhou ao iniciar. Feche o outro app e tente novamente.';
+        } else if (name === 'OverconstrainedError') {
+          msg = 'Resolução ou restrição de câmera não suportada pelo hardware. Tente outra câmera ou revise as restrições.';
         }
         setError(msg);
         setIsStreaming(false);
@@ -152,6 +187,10 @@ export function useCamera({
 
   const toggleMirror = useCallback(() => {
     setIsMirrored((prev) => !prev);
+  }, []);
+
+  const clearError = useCallback(() => {
+    setError(null);
   }, []);
 
   useEffect(() => {
@@ -176,5 +215,6 @@ export function useCamera({
     stopCamera,
     switchCamera,
     toggleMirror,
+    clearError,
   };
 }

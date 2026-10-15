@@ -16,10 +16,12 @@ import {
 } from 'lucide-react';
 import CameraCapture from './CameraCapture';
 import EmbeddingInspector from './EmbeddingInspector';
+import RemoteWebcamDialog from './RemoteWebcamDialog';
+import EmbeddingsExportPanel from './EmbeddingsExportPanel';
 import { useCamera } from '@/hooks/useCamera';
 import { useFaceEngine } from '@/hooks/useFaceEngine';
 import { checkFaceQuality, analyzeImageMetrics, StabilityTracker, type QualityAssessment } from '@/lib/quality';
-import { l2Normalize, computeMeanEmbedding } from '@/lib/matching';
+import { l2Normalize, computeMeanEmbedding, DEFAULT_THRESHOLD, isDegenerateEmbedding, maxPairwiseDistance } from '@/lib/matching';
 import { upsertProfile, generateUserId, type FaceProfile } from '@/lib/storage';
 import type { DetectionResult } from '@/lib/faceEngine';
 
@@ -34,7 +36,7 @@ export default function EnrollmentWizard() {
   // Dados do Usuário
   const [nome, setNome] = useState('');
   const [userId, setUserId] = useState('');
-  const [threshold, setThreshold] = useState(0.45);
+  const [threshold, setThreshold] = useState(DEFAULT_THRESHOLD);
   const [includeThumbnail, setIncludeThumbnail] = useState(false);
 
   // Amostras Coletadas
@@ -43,9 +45,16 @@ export default function EnrollmentWizard() {
     { id: number; score: number; sharpness: number; at: string }[]
   >([]);
   const [meanEmbedding, setMeanEmbedding] = useState<number[] | null>(null);
+  // Diversidade entre as 5 amostras (maior distância par-a-par). Valores muito
+  // baixos indicam capturas quase idênticas -> perfil frágil e super confiante.
+  const [sampleDiversity, setSampleDiversity] = useState<number | null>(null);
 
   // Flash visual no momento da captura
   const [captureFlash, setCaptureFlash] = useState(false);
+
+  // Webcam remota (celular via QR -> WebRTC). Quando ativa, substitui a webcam local.
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const usingRemote = remoteStream !== null;
 
   // IA e Câmera
   const {
@@ -53,10 +62,13 @@ export default function EnrollmentWizard() {
     isStreaming,
     isLoading: isCamLoading,
     error: camError,
+    devices: camDevices,
+    activeDeviceId: camDeviceId,
     isMirrored,
     startCamera,
     stopCamera,
     toggleMirror,
+    clearError: clearCamError,
   } = useCamera({ autoStart: false });
 
   const { isReady: isAiReady, isLoading: isAiLoading, statusText: aiStatus, detect } = useFaceEngine();
@@ -81,12 +93,37 @@ export default function EnrollmentWizard() {
     setSamples([]);
     setSamplePreviews([]);
     setMeanEmbedding(null);
-    await startCamera();
+    setSampleDiversity(null);
+    // Se o celular já estiver conectado via QR, não abre a webcam local
+    if (!remoteStream) {
+      await startCamera();
+    }
   };
 
-  // Processamento do Loop de Inferência
+  // Recebe o stream remoto do diálogo QR; libera a webcam local para economizar recursos
+  const handleRemoteStream = useCallback(
+    (stream: MediaStream | null) => {
+      if (stream) {
+        stopCamera();
+        clearCamError();
+      }
+      setRemoteStream(stream);
+    },
+    [stopCamera, clearCamError]
+  );
+
+  // Exibe o stream do celular no mesmo <video> do CameraCapture
   useEffect(() => {
-    if (step !== 2 || !isStreaming || !isAiReady) return;
+    if (remoteStream && videoRef.current) {
+      videoRef.current.srcObject = remoteStream;
+      videoRef.current.play().catch(() => {});
+    }
+  }, [remoteStream, videoRef, step]);
+
+  // Processamento do Loop de Inferência (webcam local OU celular remoto)
+  useEffect(() => {
+    const cameraActive = isStreaming || usingRemote;
+    if (step !== 2 || !cameraActive || !isAiReady) return;
 
     let animationFrameId: number;
     let isProcessing = false;
@@ -160,7 +197,7 @@ export default function EnrollmentWizard() {
     return () => {
       cancelAnimationFrame(animationFrameId);
     };
-  }, [step, isStreaming, isAiReady, detect, videoRef]);
+  }, [step, isStreaming, usingRemote, isAiReady, detect, videoRef]);
 
   // Função para capturar uma amostra
   const captureCurrentSample = useCallback(() => {
@@ -168,13 +205,19 @@ export default function EnrollmentWizard() {
     if (!detectionResult || !detectionResult.primaryFace || !detectionResult.embedding) return;
     if (!quality || !quality.isValid) return;
 
+    const rawEmbedding = detectionResult.embedding;
+    // Rejeita vetor degenerado (modelo falhou): ele casaria com qualquer pessoa.
+    if (isDegenerateEmbedding(rawEmbedding)) {
+      console.warn('Amostra rejeitada: embedding degenerado (variância ~0).');
+      return;
+    }
+
     isCapturingRef.current = true;
 
     // Dispara efeito visual de flash
     setCaptureFlash(true);
     setTimeout(() => setCaptureFlash(false), 200);
 
-    const rawEmbedding = detectionResult.embedding;
     const normalized = l2Normalize(rawEmbedding);
 
     const newSamples = [...samples, normalized];
@@ -193,6 +236,7 @@ export default function EnrollmentWizard() {
       stopCamera();
       const mean = computeMeanEmbedding(newSamples);
       setMeanEmbedding(mean);
+      setSampleDiversity(maxPairwiseDistance(newSamples));
       setStep(3);
     }
 
@@ -368,12 +412,15 @@ export default function EnrollmentWizard() {
           <div className="relative">
             <CameraCapture
               videoRef={videoRef}
-              isStreaming={isStreaming}
+              isStreaming={isStreaming || usingRemote}
               isLoading={isCamLoading}
-              error={camError}
+              error={usingRemote ? null : camError}
               isMirrored={isMirrored}
               onStartCamera={startCamera}
               onToggleMirror={toggleMirror}
+              devices={camDevices}
+              activeDeviceId={camDeviceId}
+              onSelectDevice={(id) => startCamera(id)}
               detectionResult={detectionResult}
               qualityAssessment={quality}
               showQualityPanel={true}
@@ -384,7 +431,15 @@ export default function EnrollmentWizard() {
                 )
               }
             />
+            {usingRemote && (
+              <p className="mt-2 text-[11px] font-semibold text-emerald-400">
+                Fonte ativa: celular remoto (resultados calculados neste PC).
+              </p>
+            )}
           </div>
+
+          {/* Alternativa: celular como webcam via QR */}
+          <RemoteWebcamDialog onStreamChange={handleRemoteStream} />
 
           {/* Botão de Captura Manual / Automática */}
           <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-4 rounded-2xl bg-slate-900/60 border border-slate-800">
@@ -458,11 +513,39 @@ export default function EnrollmentWizard() {
               </div>
             </div>
 
+            {/* Alerta de diversidade: amostras quase idênticas geram perfil frágil */}
+            {sampleDiversity !== null && sampleDiversity < 0.08 && (
+              <div className="p-4 rounded-xl bg-amber-950/40 border border-amber-500/30 text-xs text-amber-200 space-y-1">
+                <p className="font-bold text-amber-300">
+                  Amostras muito parecidas (diversidade {sampleDiversity.toFixed(4)})
+                </p>
+                <p className="text-amber-200/90">
+                  As 5 capturas ficaram quase idênticas — o perfil pode ficar super confiante e
+                  aceitar outras pessoas. Refaça variando levemente pose, expressão e distância
+                  da câmera entre cada captura.
+                </p>
+              </div>
+            )}
+
             {/* Inspecionar o Embedding Médio Calculado */}
             <EmbeddingInspector
               embedding={meanEmbedding}
               title={`Embedding Mestre de ${nome}`}
               subtitle="Vetor de 512 floats pronto para armazenar no LocalStorage"
+            />
+
+            {/* Export JSON: local salva em ./exports, prod exibe preview + download */}
+            <EmbeddingsExportPanel
+              payload={{
+                userId,
+                nome: nome.trim(),
+                embeddingDim: meanEmbedding.length,
+                samples,
+                meanEmbedding,
+                threshold,
+              }}
+              filename={`embedding-${userId || 'perfil'}`}
+              title="Exportar embeddings desta sessão (JSON)"
             />
 
             {/* Opções de Privacidade / Thumbnail */}
@@ -491,6 +574,7 @@ export default function EnrollmentWizard() {
                   setSamples([]);
                   setSamplePreviews([]);
                   setMeanEmbedding(null);
+                  setSampleDiversity(null);
                   startCamera();
                 }}
                 className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold flex items-center justify-center gap-2 transition cursor-pointer"

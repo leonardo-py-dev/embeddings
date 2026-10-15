@@ -10,7 +10,7 @@ export interface FaceProfile {
   embeddingDim: number;    // ex: 512
   samples: number[][];     // 3 a 5 amostras normalizadas
   meanEmbedding: number[]; // média L2 renormalizada
-  threshold: number;       // default 0.45 (distância)
+  threshold: number;       // default 0.35 (distância cosseno)
   thumbnail?: string;      // dataURL opcional se consentido
 }
 

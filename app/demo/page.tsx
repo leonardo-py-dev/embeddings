@@ -26,6 +26,7 @@ import {
   euclideanDistance,
   calculateMatchScore,
   l2Normalize,
+  DEFAULT_THRESHOLD,
 } from '@/lib/matching';
 
 export default function DemoPage() {
@@ -46,7 +47,7 @@ export default function DemoPage() {
   const [errorB, setErrorB] = useState<string | null>(null);
 
   // Threshold dinâmico
-  const [threshold, setThreshold] = useState<number>(0.45);
+  const [threshold, setThreshold] = useState<number>(DEFAULT_THRESHOLD);
 
   const fileInputARef = useRef<HTMLInputElement | null>(null);
   const fileInputBRef = useRef<HTMLInputElement | null>(null);
@@ -181,7 +182,7 @@ export default function DemoPage() {
   let simCosine = 0;
   let distCosine = 0;
   let distEuclid = 0;
-  let matchInfo = { isMatch: false, similarityScore: 0, distance: 0, threshold: 0.45 };
+  let matchInfo = { isMatch: false, similarityScore: 0, distance: 0, threshold: DEFAULT_THRESHOLD };
 
   if (embeddingA && embeddingB) {
     simCosine = cosineSimilarity(embeddingA, embeddingB);
@@ -487,7 +488,7 @@ export default function DemoPage() {
         <div className="p-4 rounded-2xl bg-cyan-950/20 border border-cyan-800/30 text-xs text-cyan-300">
           <p className="font-semibold mb-1">Ponto de Equilíbrio (Equal Error Rate - EER):</p>
           <p className="text-slate-300">
-            O valor recomendado de <span className="font-mono text-cyan-400 font-bold">0.45</span> foi calibrado para equilibrar a menor taxa de falso aceite com uma experiência fluida sem rejeições frustrantes para a mesma pessoa.
+            O valor recomendado de <span className="font-mono text-cyan-400 font-bold">0.35</span> foi calibrado para priorizar a rejeição de outras pessoas (baixo FAR). Se o seu próprio login falhar com boa luz, suba aos poucos até 0.40–0.45 — mas teste sempre com o rosto de outra pessoa para confirmar que ela continua rejeitada.
           </p>
         </div>
       </section>

@@ -17,10 +17,14 @@ interface CameraCaptureProps {
   onToggleMirror: () => void;
   onSwitchCamera?: () => void;
   hasMultipleCameras?: boolean;
+  devices?: MediaDeviceInfo[];
+  activeDeviceId?: string | null;
+  onSelectDevice?: (deviceId: string) => void;
   detectionResult?: DetectionResult | null;
   qualityAssessment?: QualityAssessment | null;
   showQualityPanel?: boolean;
   showGuideOval?: boolean;
+  showPhoneHint?: boolean;
   scannerActive?: boolean;
   customOverlay?: React.ReactNode;
   aspectRatioClass?: string;
@@ -36,10 +40,14 @@ export default function CameraCapture({
   onToggleMirror,
   onSwitchCamera,
   hasMultipleCameras = false,
+  devices = [],
+  activeDeviceId = null,
+  onSelectDevice,
   detectionResult = null,
   qualityAssessment = null,
   showQualityPanel = true,
   showGuideOval = true,
+  showPhoneHint = true,
   scannerActive = false,
   customOverlay,
   aspectRatioClass = 'aspect-[4/3] sm:aspect-[16/10]',
@@ -118,12 +126,26 @@ export default function CameraCapture({
 
         {/* Estado: Erro de Permissão ou Hardware */}
         {error && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center bg-rose-950/80 backdrop-blur-sm z-20">
+          <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center bg-rose-950/80 backdrop-blur-sm z-20 overflow-y-auto">
             <div className="w-14 h-14 rounded-2xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-center mb-3 text-rose-400">
               <AlertTriangle className="w-7 h-7" />
             </div>
-            <h4 className="text-sm font-semibold text-rose-200 mb-1">Acesso à Câmera Negado</h4>
-            <p className="text-xs text-rose-300/90 max-w-sm mb-4">{error}</p>
+            <h4 className="text-sm font-semibold text-rose-200 mb-1">Problema com a Câmera</h4>
+            <p className="text-xs text-rose-300/90 max-w-sm mb-3">{error}</p>
+            {devices.length > 1 && onSelectDevice && (
+              <select
+                value={activeDeviceId || ''}
+                onChange={(e) => e.target.value && onSelectDevice(e.target.value)}
+                className="mb-3 max-w-sm w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
+              >
+                <option value="">Trocar de câmera...</option>
+                {devices.map((d, i) => (
+                  <option key={d.deviceId} value={d.deviceId}>
+                    {d.label || `Câmera ${i + 1}`}
+                  </option>
+                ))}
+              </select>
+            )}
             <button
               onClick={onStartCamera}
               className="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-medium text-xs transition cursor-pointer flex items-center gap-2"
@@ -131,6 +153,13 @@ export default function CameraCapture({
               <RefreshCw className="w-3.5 h-3.5" />
               Tentar Novamente
             </button>
+            {showPhoneHint && (
+              <p className="text-[11px] text-slate-300 mt-3 max-w-sm">
+                Sem webcam neste dispositivo? Use a opção{' '}
+                <span className="font-semibold text-cyan-300">“celular como webcam (QR)”</span>{' '}
+                logo abaixo — o processamento continua neste PC.
+              </p>
+            )}
           </div>
         )}
 
